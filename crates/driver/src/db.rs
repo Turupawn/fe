@@ -32,6 +32,7 @@ use include_dir::{include_dir, Dir};
 
 use crate::diagnostics::ToCsDiag;
 
+static LIBRARY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../library");
 static LIBRARY: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../library");
 
 #[salsa::db]
@@ -208,7 +209,7 @@ impl DriverDataBase {
 
         let input_files = self.set_ingot_source_files(
             input_ingot,
-            &Utf8PathBuf::from_str("core/src/lib.fe").unwrap(),
+            &Utf8PathBuf::from_str(&format!("{}/core/src/lib.fe", LIBRARY_PATH)).unwrap(),
             files,
         );
 
@@ -228,7 +229,12 @@ impl DriverDataBase {
 
         let root_file = *input_files
             .iter()
-            .find(|input_file| input_file.path(self) == root)
+            .find(|input_file| {
+                let input_path = input_file.path(self);
+                let input_path_abs = std::path::PathBuf::from(input_path).canonicalize().unwrap();
+                let root_abs = std::path::PathBuf::from(root).canonicalize().unwrap();
+                input_path_abs == root_abs
+            })
             .expect("missing root source file");
 
         ingot.set_files(self, input_files.clone());
@@ -302,10 +308,10 @@ fn initialize_analysis_pass(db: &DriverDataBase) -> AnalysisPassManager<'_> {
 fn write_files_recursive(dir: &Dir, files: &mut Vec<(Utf8PathBuf, String)>) {
     for file in dir.files() {
         files.push((
-            Utf8PathBuf::from_path_buf(file.path().to_path_buf())
-                .expect("static core error. use cli `--core` arg  to debug"),
+            Utf8PathBuf::from_str(&format!("{}/{}", LIBRARY_PATH, file.path().display()))
+                .expect("static core error. use cli `--core` arg to debug"),
             std::str::from_utf8(file.contents())
-                .expect("static core error. use cli `--core` arg  to debug")
+                .expect("static core error. use cli `--core` arg to debug")
                 .to_string(),
         ));
     }
