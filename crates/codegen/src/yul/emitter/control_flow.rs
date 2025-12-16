@@ -120,7 +120,44 @@ impl<'db> FunctionEmitter<'db> {
                 .or_insert_with(|| state.alloc_local());
         }
 
-        let mut docs = self.render_statements(&block.insts, state)?;
+        // Check if this block is a loop initialization block (Goto to a loop header)
+        // If so, skip the last Let instruction since it will be in the for loop brackets
+        // But we still need to create the binding in the state by rendering it (without emitting)
+        let (insts_to_render, skip_last_let) = if let Terminator::Goto { target } = &block.terminator {
+            if self.loop_info(*target).is_some() {
+                // This is a loop initialization block - we'll skip the last Let instruction
+                if block.insts.iter().rev().any(|inst| matches!(inst, mir::MirInst::Let { .. })) {
+                    (block.insts.as_slice(), true)
+                } else {
+                    (block.insts.as_slice(), false)
+                }
+            } else {
+                (block.insts.as_slice(), false)
+            }
+        } else {
+            (block.insts.as_slice(), false)
+        };
+        
+        let mut docs = if skip_last_let {
+            // Render all instructions except the last Let (to update state), but don't emit the last Let
+            let (insts_without_last, last_let_opt) = if let Some((last_idx, _)) = insts_to_render.iter().enumerate().rev().find(|(_, inst)| matches!(inst, mir::MirInst::Let { .. })) {
+                let (before, after) = insts_to_render.split_at(last_idx);
+                (before, after.first())
+            } else {
+                (insts_to_render, None)
+            };
+            
+            // Render all instructions before the last Let
+            let mut docs = self.render_statements(insts_without_last, state)?;
+            
+            // Render the last Let to update state, but don't add it to docs
+            if let Some(last_let) = last_let_opt {
+                let _ = self.render_statements(std::slice::from_ref(last_let), state)?;
+            }
+            docs
+        } else {
+            self.render_statements(insts_to_render, state)?
+        };
         {
             let mut ctx = BlockEmitCtx {
                 loop_ctx,
@@ -567,15 +604,120 @@ impl<'db> FunctionEmitter<'db> {
             ));
         }
         let cond_expr = self.lower_value(cond, state)?;
+        
+        // Find the initialization block (predecessor with Goto to header)
+        let init_block = self
+            .mir_func
+            .body
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(idx, block)| {
+                if let Terminator::Goto { target } = block.terminator {
+                    if target == header {
+                        Some(BasicBlockId(idx as u32))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
+        
+        // Extract initialization statements - only the last Let instruction (loop variable initialization)
+        // The loop variable initialization is added right before the Goto, so it should be the last Let
+        let mut init_str = String::new();
+        if let Some(init_block_id) = init_block {
+            let init_block = &self.mir_func.body.blocks[init_block_id.index()];
+            // Find the last Let instruction (should be the loop variable initialization)
+            if let Some(last_let) = init_block.insts.iter().rev().find(|inst| matches!(inst, mir::MirInst::Let { .. })) {
+                if let mir::MirInst::Let { pat, value: Some(value), .. } = last_let {
+                    // Manually construct "let var := value" to ensure it's a declaration, not assignment
+                    if let Ok(binding_name) = self.pattern_ident(*pat) {
+                        let value_expr = self.lower_value(*value, state)?;
+                        // Use the Yul temp name from state if it exists, otherwise use pattern name
+                        let yul_name = state.binding(&binding_name).unwrap_or_else(|| {
+                            // If binding doesn't exist, allocate a new temp
+                            let temp = state.alloc_local();
+                            state.insert_binding(binding_name, temp.clone());
+                            temp
+                        });
+                        init_str = format!("let {yul_name} := {value_expr}");
+                    }
+                }
+            }
+        }
+        
+        // Extract increment statements from backedge - only the last AugAssign instruction (loop variable increment)
+        let mut increment_docs = Vec::new();
+        if let Some(backedge_id) = info.backedge {
+            let backedge_block = &self.mir_func.body.blocks[backedge_id.index()];
+            // Find the last AugAssign instruction (should be the loop variable increment)
+            if let Some(last_aug_assign) = backedge_block.insts.iter().rev().find(|inst| matches!(inst, mir::MirInst::AugAssign { .. })) {
+                let mut backedge_state = state.clone();
+                increment_docs = self.render_statements(std::slice::from_ref(last_aug_assign), &mut backedge_state)?;
+            }
+        }
+        
         let loop_ctx = LoopEmitCtx {
             continue_target: header,
             break_target: info.exit,
             implicit_continue: info.backedge,
         };
-        let body_docs = self.emit_block_with_ctx(info.body, Some(loop_ctx), state)?;
-        let loop_doc = YulDoc::block(format!("for {{ }} {cond_expr} {{ }} "), body_docs);
+        // Emit body - the backedge should be handled separately via implicit_continue
+        let mut body_docs = self.emit_block_with_ctx(info.body, Some(loop_ctx), state)?;
+        
+        // Remove the increment statement from body if it's present (it should be in the increment bracket)
+        // Find and remove the last line that matches the increment pattern
+        if let Some(backedge_id) = info.backedge {
+            let backedge_block = &self.mir_func.body.blocks[backedge_id.index()];
+            if let Some(last_aug_assign) = backedge_block.insts.iter().rev().find(|inst| matches!(inst, mir::MirInst::AugAssign { .. })) {
+                // Render the increment to get its string representation
+                let mut temp_state = state.clone();
+                if let Ok(increment_doc_vec) = self.render_statements(std::slice::from_ref(last_aug_assign), &mut temp_state) {
+                    if let Some(YulDoc::Line(increment_line)) = increment_doc_vec.first() {
+                        // Remove the last matching line from body_docs
+                        if let Some(pos) = body_docs.iter().rposition(|doc| {
+                            if let YulDoc::Line(line) = doc {
+                                line == increment_line
+                            } else {
+                                false
+                            }
+                        }) {
+                            body_docs.remove(pos);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Format increment block as string
+        let increment_str = format_docs_for_brackets(&increment_docs);
+        
+        let loop_doc = YulDoc::block(
+            format!("for {{ {init_str} }} {cond_expr} {{ {increment_str} }} "),
+            body_docs,
+        );
         Ok((loop_doc, info.exit))
     }
+}
+
+/// Formats YulDoc statements for use in for loop brackets.
+///
+/// * `docs` - Vector of YulDoc statements.
+///
+/// Returns a string with the statements formatted for the for loop brackets.
+fn format_docs_for_brackets(docs: &[YulDoc]) -> String {
+    docs.iter()
+        .filter_map(|doc| {
+            if let YulDoc::Line(text) = doc {
+                Some(text.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Translates MIR switch literal kinds into their Yul literal strings.

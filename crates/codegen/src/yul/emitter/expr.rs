@@ -47,14 +47,11 @@ impl<'db> FunctionEmitter<'db> {
                     let expr_is_array = matches!(expr_base.data(self.db), hir::analysis::ty::ty_def::TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Prim(hir::analysis::ty::ty_def::PrimTy::Array)));
                     let value_is_array = matches!(value_base.data(self.db), hir::analysis::ty::ty_def::TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Prim(hir::analysis::ty::ty_def::PrimTy::Array)));
                     if expr_is_array && !value_is_array {
-                        // This is array indexing: arr[index]
-                        // Check if we have array indexing info stored
                         if let Some((arr_val, index_val)) = self.mir_func.body.array_index_info.get(&value_id) {
                             let arr_expr = self.lower_value(*arr_val, state)?;
                             let index_expr = self.lower_value(*index_val, state)?;
                             Ok(format!("mload(add({arr_expr}, mul({index_expr}, 32)))"))
                         } else {
-                            // No indexing info, just lower the expression normally
                             self.lower_expr(*expr_id, state)
                         }
                     } else {

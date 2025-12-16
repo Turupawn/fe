@@ -1,5 +1,5 @@
 pub fn range_loop() -> u256 {
-    let mut sum: u256 = 1
+    let mut sum: u256 = 2
     for i in 5..10 {
         sum += i
     }
