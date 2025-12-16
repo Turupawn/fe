@@ -1,0 +1,29 @@
+pub fn thisWorks(arr: [u256; 3]) -> u64 {
+    let x = 0
+    if x > 10 {
+        let y : u64 = arr[1]
+        y
+    } else {
+        10
+    }
+}
+
+pub fn thisDoesnt(arr: [u256; 3]) -> u64 {
+    let x = 0
+    let y : u64 = arr[1]
+    if x > 10 {
+        y
+    } else {
+        10
+    }
+}
+
+pub fn thisDoesnt2(arr: [u256; 3]) -> u64 {
+    let x = 0
+    let y = 0
+    while x < 10 {
+        let z : u64 = arr[1]
+        x = x + 1
+    }
+    y
+}

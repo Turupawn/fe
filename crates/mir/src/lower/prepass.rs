@@ -114,6 +114,10 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
             self.record_value_address_space(expr, value);
             return value;
         }
+        if let Some(value) = self.try_lower_index(expr) {
+            self.record_value_address_space(expr, value);
+            return value;
+        }
         if let Some(value) = self.try_const_expr(expr) {
             self.record_value_address_space(expr, value);
             return value;

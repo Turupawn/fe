@@ -1,0 +1,38 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/resolve_issue.fe
+---
+function thisWorks(arr) -> ret {
+  let v0 := 0
+  let v1 := 0
+  if gt(v0, 10) {
+    v1 := y
+  }
+  if iszero(gt(v0, 10)) {
+    v1 := 10
+  }
+  ret := v1
+}
+function thisDoesnt(arr) -> ret {
+  let v0 := 0
+  let v1 := mload(add(arr, mul(1, 32)))
+  let v2 := 0
+  if gt(v0, 10) {
+    v2 := v1
+  }
+  if iszero(gt(v0, 10)) {
+    v2 := 10
+  }
+  ret := v2
+}
+function thisDoesnt2(arr) -> ret {
+  let v0 := 0
+  let v1 := 0
+  for { } lt(v0, 10) { } {
+    let v2 := mload(add(arr, mul(1, 32)))
+    v0 := add(v0, 1)
+  }
+  ret := v1
+}

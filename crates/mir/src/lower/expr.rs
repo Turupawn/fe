@@ -2,6 +2,7 @@
 //! to specialized lowering helpers.
 
 use super::*;
+use hir::hir_def::expr::BinOp;
 
 impl<'db, 'a> MirBuilder<'db, 'a> {
     /// Lowers the body root expression, starting from the provided entry block.
@@ -180,6 +181,37 @@ impl<'db, 'a> MirBuilder<'db, 'a> {
     fn is_method_call(&self, expr: ExprId) -> bool {
         let exprs = self.body.exprs(self.db);
         matches!(&exprs[expr], Partial::Present(Expr::MethodCall(..)))
+    }
+
+    /// Attempts to lower an array indexing expression into a MIR call value.
+    ///
+    /// # Parameters
+    /// - `expr`: Expression id representing the indexing operation.
+    ///
+    /// # Returns
+    /// The allocated `ValueId` for the call result, or `None` if not an indexing operation
+    /// or if it doesn't have a callable (built-in array indexing).
+    pub(super) fn try_lower_index(&mut self, expr: ExprId) -> Option<ValueId> {
+        let Partial::Present(Expr::Bin(lhs, rhs, BinOp::Index)) = expr.data(self.db, self.body) else {
+            return None;
+        };
+        // Try to get the callable for the indexing operation.
+        // For built-in array indexing, callable_expr may return None, in which case
+        // we return None and let it be handled as a regular expression.
+        let callable = self.typed_body.callable_expr(expr)?;
+        let lhs_value = self.ensure_value(*lhs);
+        let rhs_value = self.ensure_value(*rhs);
+        let ty = self.typed_body.expr_ty(self.db, expr);
+        Some(self.mir_body.alloc_value(ValueData {
+            ty,
+            origin: ValueOrigin::Call(CallOrigin {
+                expr,
+                callable: callable.clone(),
+                args: vec![lhs_value, rhs_value],
+                receiver_space: None,
+                resolved_name: None,
+            }),
+        }))
     }
 
     /// Rewrites a field access expression into either a `get_field` call (for primitives)
