@@ -168,6 +168,67 @@ impl<'db> FunctionEmitter<'db> {
                     };
                     Ok(format!("{func}({left}, {right})"))
                 }
+                BinOp::Index => {
+                    // Array indexing should have been converted to a call in MIR lowering if it has a callable.
+                    // Check if the expression has a value with ValueOrigin::Call first.
+                    // If it does, it should already be handled in the check at the beginning
+                    // of lower_expr.
+                    if let Some(value_id) = self.mir_func.body.expr_values.get(&expr_id) {
+                        let value = self.mir_func.body.value(*value_id);
+                        if let ValueOrigin::Call(call) = &value.origin {
+                            return self.lower_call_value(call, state);
+                        }
+                    }
+                    // If it wasn't converted to a call, it means callable_expr returned None.
+                    // This happens for built-in array indexing. In this case, we need to handle
+                    // it as a built-in operation by trying to get the callable again.
+                    // If there's still no callable, it means this is a built-in array indexing
+                    // that should have been handled differently. For now, try to get the callable
+                    // one more time, and if it's still None, return an error.
+                    if let Some(callable) = self.mir_func.typed_body.callable_expr(expr_id) {
+                        let left = self.lower_expr(*lhs, state)?;
+                        let right = self.lower_expr(*rhs, state)?;
+                        let callee = match callable.callable_def {
+                            CallableDef::Func(func) => function_name(self.db, func),
+                            CallableDef::VariantCtor(_) => {
+                                return Err(YulError::Unsupported(
+                                    "variant constructor indexing not supported".into(),
+                                ));
+                            }
+                        };
+                        let mut lowered_args = vec![left, right];
+                        if let CallableDef::Func(func_def) = callable.callable_def {
+                            let effect_args = self.lower_effect_arguments(func_def, state)?;
+                            lowered_args.extend(effect_args);
+                        }
+                        if let Some(arg) = try_collapse_cast_shim(&callee, &lowered_args)? {
+                            Ok(arg)
+                        } else if lowered_args.is_empty() {
+                            Ok(format!("{callee}()"))
+                        } else {
+                            Ok(format!("{callee}({})", lowered_args.join(", ")))
+                        }
+                    } else {
+                        // Built-in array indexing without a callable. This happens because
+                        // array indexing is handled as a built-in operation in type checking
+                        // (see TODO in ty_check/expr.rs) and doesn't go through the trait system.
+                        // Handle it directly by treating the array as a memory pointer and
+                        // calculating the offset based on the index and element size.
+                        let array_ptr = self.lower_expr(*lhs, state)?;
+                        let index = self.lower_expr(*rhs, state)?;
+                        
+                        // For built-in array indexing, arrays are stored in memory with 32-byte elements.
+                        // The array pointer points to the start of the array, and we calculate the offset
+                        // as index * 32 bytes. Then we use mload to load the element.
+                        // Note: This assumes 32-byte alignment which is standard for EVM memory.
+                        
+                        // Calculate offset: index * 32 (arrays use 32-byte elements in memory)
+                        // Then load from array_ptr + offset using mload
+                        let offset = format!("mul({index}, 32)");
+                        let addr = format!("add({array_ptr}, {offset})");
+                        Ok(format!("mload({addr})"))
+                    }
+                }
                 _ => Err(YulError::Unsupported(
                     "only arithmetic/logical binary expressions are supported right now".into(),
                 )),
