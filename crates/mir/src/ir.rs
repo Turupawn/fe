@@ -50,6 +50,8 @@ pub struct MirBody<'db> {
     pub expr_values: FxHashMap<ExprId, ValueId>,
     pub loop_headers: FxHashMap<BasicBlockId, LoopInfo>,
     pub match_info: FxHashMap<ExprId, MatchLoweringInfo>,
+    /// Maps value IDs to their array indexing info (array value, index value) for array loop patterns
+    pub array_index_info: FxHashMap<ValueId, (ValueId, ValueId)>,
 }
 
 impl<'db> MirBody<'db> {
@@ -61,6 +63,7 @@ impl<'db> MirBody<'db> {
             expr_values: FxHashMap::default(),
             loop_headers: FxHashMap::default(),
             match_info: FxHashMap::default(),
+            array_index_info: FxHashMap::default(),
         }
     }
 
@@ -313,6 +316,12 @@ pub enum SyntheticValue {
     Int(BigUint),
     /// Boolean literal stored as `0` or `1`.
     Bool(bool),
+    /// Comparison operation (left < right)
+    Comparison {
+        left: ValueId,
+        right: ValueId,
+        op: hir::hir_def::expr::CompBinOp,
+    },
 }
 
 #[derive(Debug, Clone)]

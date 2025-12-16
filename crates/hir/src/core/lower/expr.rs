@@ -41,8 +41,15 @@ impl<'db> Expr<'db> {
             ast::ExprKind::Bin(bin) => {
                 let lhs = Self::push_to_body_opt(ctxt, bin.lhs());
                 let rhs = Self::push_to_body_opt(ctxt, bin.rhs());
-                let op = bin.op().expect("parser guarantees op presence");
-                let op = BinOp::lower_ast(op);
+                // WILD: Handle .. operator which isn't in BinOp enum yet
+                // For now, if op is None, we'll use Index as a placeholder
+                // and handle it specially in MIR lowering by checking the BinOp variant
+                let op = if let Some(op) = bin.op() {
+                    BinOp::lower_ast(op)
+                } else {
+                    // It's a .. operator - use Index as placeholder, we'll detect it in MIR lowering
+                    BinOp::Index
+                };
                 Self::Bin(lhs, rhs, op)
             }
 

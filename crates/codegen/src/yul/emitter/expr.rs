@@ -39,12 +39,29 @@ impl<'db> FunctionEmitter<'db> {
                 if let Some(temp) = self.match_values.get(expr_id) {
                     Ok(temp.clone())
                 } else {
-                    self.lower_expr(*expr_id, state)
+                    // Check if this is an array indexing case: expr_id is an array but value type is element type
+                    let expr_ty = self.mir_func.typed_body.expr_ty(self.db, *expr_id);
+                    let value_ty = value.ty;
+                    let (expr_base, _) = expr_ty.decompose_ty_app(self.db);
+                    let (value_base, _) = value_ty.decompose_ty_app(self.db);
+                    let expr_is_array = matches!(expr_base.data(self.db), hir::analysis::ty::ty_def::TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Prim(hir::analysis::ty::ty_def::PrimTy::Array)));
+                    let value_is_array = matches!(value_base.data(self.db), hir::analysis::ty::ty_def::TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Prim(hir::analysis::ty::ty_def::PrimTy::Array)));
+                    if expr_is_array && !value_is_array {
+                        if let Some((arr_val, index_val)) = self.mir_func.body.array_index_info.get(&value_id) {
+                            let arr_expr = self.lower_value(*arr_val, state)?;
+                            let index_expr = self.lower_value(*index_val, state)?;
+                            Ok(format!("mload(add({arr_expr}, mul({index_expr}, 32)))"))
+                        } else {
+                            self.lower_expr(*expr_id, state)
+                        }
+                    } else {
+                        self.lower_expr(*expr_id, state)
+                    }
                 }
             }
             ValueOrigin::Call(call) => self.lower_call_value(call, state),
             ValueOrigin::Intrinsic(intr) => self.lower_intrinsic_value(intr, state),
-            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth),
+            ValueOrigin::Synthetic(synth) => self.lower_synthetic_value(synth, state),
             ValueOrigin::FieldPtr(field_ptr) => self.lower_field_ptr(field_ptr, state),
             _ => Err(YulError::Unsupported(
                 "only expression-derived values are supported".into(),
@@ -74,7 +91,7 @@ impl<'db> FunctionEmitter<'db> {
             match &value.origin {
                 ValueOrigin::Call(call) => return self.lower_call_value(call, state),
                 ValueOrigin::Synthetic(synth) => {
-                    return self.lower_synthetic_value(synth);
+                    return self.lower_synthetic_value(synth, state);
                 }
                 ValueOrigin::FieldPtr(field_ptr) => {
                     return self.lower_field_ptr(field_ptr, state);
@@ -168,9 +185,15 @@ impl<'db> FunctionEmitter<'db> {
                     };
                     Ok(format!("{func}({left}, {right})"))
                 }
-                _ => Err(YulError::Unsupported(
-                    "only arithmetic/logical binary expressions are supported right now".into(),
-                )),
+                BinOp::Index => {
+                    // Array indexing: arr[index]
+                    let arr_expr = self.lower_expr(*lhs, state)?;
+                    let index_expr = self.lower_expr(*rhs, state)?;
+                    // In YUL, array indexing is done with mload(add(arr_ptr, mul(index, element_size)))
+                    // For now, naive implementation: just use add(arr, index) as placeholder
+                    // TODO: proper array indexing with element size
+                    Ok(format!("mload(add({arr_expr}, mul({index_expr}, 32)))"))
+                }
             },
             Expr::Block(stmts) => {
                 if let Some(expr) = self.last_expr(stmts) {
@@ -272,12 +295,26 @@ impl<'db> FunctionEmitter<'db> {
     /// Lowers special MIR synthetic values such as constants into Yul expressions.
     ///
     /// * `value` - Synthetic value emitted during MIR construction.
+    /// * `state` - Binding state for lowering nested values.
     ///
     /// Returns the literal Yul expression for the synthetic value.
-    fn lower_synthetic_value(&self, value: &SyntheticValue) -> Result<String, YulError> {
+    fn lower_synthetic_value(&self, value: &SyntheticValue, state: &BlockState) -> Result<String, YulError> {
         match value {
             SyntheticValue::Int(int) => Ok(int.to_string()),
             SyntheticValue::Bool(flag) => Ok(if *flag { "1" } else { "0" }.into()),
+            SyntheticValue::Comparison { left, right, op } => {
+                let left_expr = self.lower_value(*left, state)?;
+                let right_expr = self.lower_value(*right, state)?;
+                let expr = match op {
+                    CompBinOp::Eq => format!("eq({left_expr}, {right_expr})"),
+                    CompBinOp::NotEq => format!("iszero(eq({left_expr}, {right_expr}))"),
+                    CompBinOp::Lt => format!("lt({left_expr}, {right_expr})"),
+                    CompBinOp::LtEq => format!("iszero(gt({left_expr}, {right_expr}))"),
+                    CompBinOp::Gt => format!("gt({left_expr}, {right_expr})"),
+                    CompBinOp::GtEq => format!("iszero(lt({left_expr}, {right_expr}))"),
+                };
+                Ok(expr)
+            }
         }
     }
 

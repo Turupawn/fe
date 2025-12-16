@@ -1,0 +1,21 @@
+---
+source: crates/codegen/tests/yul.rs
+assertion_line: 31
+expression: output
+input_file: tests/fixtures/for_loops.fe
+---
+function range_loop() -> ret {
+  let v0 := 2
+  for { let v1 := 5 } lt(v1, 10) { v1 := add(v1, 1) } {
+    v0 := add(v0, v1)
+  }
+  ret := v0
+}
+function array_loop(arr) -> ret {
+  let v0 := 0
+  for { let v1 := 0 } lt(v1, 3) { v1 := add(v1, 1) } {
+    let v2 := mload(add(arr, mul(v1, 32)))
+    v0 := add(v0, v2)
+  }
+  ret := v0
+}
