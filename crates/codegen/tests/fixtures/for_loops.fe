@@ -1,0 +1,15 @@
+pub fn range_loop() -> u256 {
+    let mut sum: u256 = 1
+    for i in 5..10 {
+        sum += i
+    }
+    return sum
+}
+
+pub fn array_loop(arr: [u256; 3]) -> u256 {
+    let mut sum: u256 = 0
+    for x in arr {
+        sum += x
+    }
+    return sum
+}

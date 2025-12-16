@@ -123,8 +123,16 @@ impl<'db, 'a> FunctionHasher<'db, 'a> {
                 self.write_u8(0x03);
                 self.write_u8(if *flag { 1 } else { 0 });
             }
-            ValueOrigin::Pat(pat) => {
+            ValueOrigin::Synthetic(SyntheticValue::Comparison { left, right, op }) => {
                 self.write_u8(0x04);
+                let left_slot = self.placeholder_value(*left);
+                self.write_u32(left_slot);
+                let right_slot = self.placeholder_value(*right);
+                self.write_u32(right_slot);
+                self.write_u8(*op as u8);
+            }
+            ValueOrigin::Pat(pat) => {
+                self.write_u8(0x05);
                 let pat_slot = self.placeholder_pat(*pat);
                 self.write_u32(pat_slot);
             }

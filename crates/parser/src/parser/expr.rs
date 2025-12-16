@@ -191,6 +191,7 @@ fn infix_binding_power<S: TokenStream>(parser: &mut Parser<S>) -> Option<(u8, u8
         Plus | Minus => (120, 121),
         Star | Slash | Percent => (130, 131),
         Star2 => (141, 140),
+        Dot2 => (140, 141), // Range operator `..` - WILD: adding this to make 4..10 parse as Bin
         Eq => {
             // `Assign` and `AugAssign` have the same binding power
             (11, 10)
